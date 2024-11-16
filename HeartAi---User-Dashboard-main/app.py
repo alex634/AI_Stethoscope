@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, abort
 from flask_cors import CORS
 import os
 import traceback
@@ -8,17 +8,15 @@ import numpy as np
 import librosa
 import librosa.display
 from heartai import predict_heart_condition  # Import your prediction function
+import sqlite3
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes to allow cross-origin requests from Streamlit
 
 # Set up folders
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
-ANALYZED_FOLDER = os.path.join(BASE_DIR, 'analyzed_spectrograms')
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(ANALYZED_FOLDER, exist_ok=True)
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+DATA_FOLDER = os.path.join(BASE_DIR, 'data')
+MASTER_DB = os.path.join(DATA_FOLDER, 'master.db')
 
 @app.route('/', methods=['GET'])
 def index():
@@ -54,12 +52,44 @@ def upload_file():
         traceback.print_exc()
         return jsonify({"error": error_message, "details": str(e)}), 500
 
-@app.route('/download/<filename>', methods=['GET'])
-def download_file(filename):
-    analyzed_path = os.path.join(ANALYZED_FOLDER, filename)
-    if not os.path.exists(analyzed_path):
-        return jsonify({"error": "File not found"}), 404
-    return send_file(analyzed_path, mimetype='image/png')
+def validate_Credentials_And_Folder(username, password_md5):
+	valid = True
+	
+	con = sqlite3.connect(MASTER_DB)
+	cur = con.cursor()
+	credentials_Query = cur.execute(f"SELECT * FROM credentials WHERE username='{username}' AND password_md5='{password_md5}';")
+	if credentials_Query.fetchone() == None:
+		valid = False
+	
+	con.close()
+	return valid
+	
+def validate_Credentials_And_Folder(username, password_md5, folder):
+	valid = True
+	
+	con = sqlite3.connect(MASTER_DB)
+	cur = con.cursor()
+	credentials_Query = cur.execute(f"SELECT * FROM credentials WHERE username='{username}' AND password_md5='{password_md5}' AND folder_name='{folder}';")
+	if credentials_Query.fetchone() == None:
+		valid = False
+	
+	con.close()
+	return valid
+
+@app.route('/download/<folder>/<filename>', methods=['GET'])
+def download_file(folder, filename):
+	data = request.get_json()
+	username = data.get('username')
+	password_md5 = data.get('password_md5')
+	if validate_Credentials_And_Folder(username, password_md5, folder):
+		full_filename = os.path.join(DATA_FOLDER, folder, filename)
+		if os.path.exists(full_filename):
+			return send_file(full_filename)
+		else:
+			abort(404)
+	else:
+		abort(401)
+	
 
 def create_spectrogram(file_path, filename):
     # Load the audio file
