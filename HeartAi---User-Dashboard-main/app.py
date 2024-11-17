@@ -10,6 +10,7 @@ import librosa.display
 from heartai import predict_heart_condition  # Import your prediction function
 import sqlite3
 import uuid
+import re
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes to allow cross-origin requests from Streamlit
@@ -19,9 +20,72 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FOLDER = os.path.join(BASE_DIR, 'data')
 MASTER_DB = os.path.join(DATA_FOLDER, 'master.db')
 
+sqlite3
+def validate_Credentials(username, password_md5):
+	valid = True
+	
+	con = sqlite3.connect(MASTER_DB)
+	cur = con.cursor()
+	credentials_Query = cur.execute(f"SELECT * FROM credentials WHERE username='{username}' AND password_md5='{password_md5}';")
+	if credentials_Query.fetchone() == None:
+		valid = False
+	
+	con.close()
+	return valid
+	
+def validate_Credentials_And_Folder(username, password_md5, folder):
+	valid = True
+	
+	con = sqlite3.connect(MASTER_DB)
+	cur = con.cursor()
+	credentials_Query = cur.execute(f"SELECT * FROM credentials WHERE username='{username}' AND password_md5='{password_md5}' AND folder_name='{folder}';")
+	if credentials_Query.fetchone() == None:
+		valid = False
+	
+	con.close()
+	return valid
+
+def get_User_Folder(username):
+	con = sqlite3.connect(MASTER_DB)
+	cur = con.cursor()
+	folder_Query = cur.execute(f"SELECT folder_name FROM credentials WHERE username='{username}';")	
+	folder = (folder_Query.fetchone())[0]
+	
+	con.close()
+	return folder
+
+def get_Epochs_In_Folder(folder):
+	files = os.listdir(folder)
+	epochs = set()
+	for file in files:
+		epochs.add(re.search("[0-9]*", file).group(0))
+	
+	return list(epochs)
+
 @app.route('/', methods=['GET'])
 def index():
     return jsonify({"message": "Backend is running"}), 200
+
+@app.route('/accesshistory', methods=['GET'])
+def access_history():
+	data = request.get_json()
+	username = data.get('username')
+	password_md5 = data.get('password_md5')
+	record_count = data.get('record_count', 10)
+	
+	if not validate_Credentials(username, password_md5):
+		abort(401)
+	
+	user_Folder = get_User_Folder(username)
+	epochs = get_Epochs_In_Folder(os.path.join(DATA_FOLDER, user_Folder))
+	epochs = epochs[0:record_count]
+	epochs = [int(x) for x in epochs]
+	
+	res = {"folder": user_Folder, "epochs": epochs}
+	
+	return jsonify(res)
+		
+	
 
 @app.route('/createuser', methods=['POST'])
 def create_user():
@@ -84,30 +148,6 @@ def upload_file():
         print(error_message, e)
         traceback.print_exc()
         return jsonify({"error": error_message, "details": str(e)}), 500
-
-def validate_Credentials_And_Folder(username, password_md5):
-	valid = True
-	
-	con = sqlite3.connect(MASTER_DB)
-	cur = con.cursor()
-	credentials_Query = cur.execute(f"SELECT * FROM credentials WHERE username='{username}' AND password_md5='{password_md5}';")
-	if credentials_Query.fetchone() == None:
-		valid = False
-	
-	con.close()
-	return valid
-	
-def validate_Credentials_And_Folder(username, password_md5, folder):
-	valid = True
-	
-	con = sqlite3.connect(MASTER_DB)
-	cur = con.cursor()
-	credentials_Query = cur.execute(f"SELECT * FROM credentials WHERE username='{username}' AND password_md5='{password_md5}' AND folder_name='{folder}';")
-	if credentials_Query.fetchone() == None:
-		valid = False
-	
-	con.close()
-	return valid
 
 @app.route('/download/<folder>/<filename>', methods=['GET'])
 def download_file(folder, filename):
