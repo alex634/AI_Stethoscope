@@ -9,6 +9,7 @@ import librosa
 import librosa.display
 from heartai import predict_heart_condition  # Import your prediction function
 import sqlite3
+import uuid
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes to allow cross-origin requests from Streamlit
@@ -21,6 +22,38 @@ MASTER_DB = os.path.join(DATA_FOLDER, 'master.db')
 @app.route('/', methods=['GET'])
 def index():
     return jsonify({"message": "Backend is running"}), 200
+
+@app.route('/createuser', methods=['POST'])
+def create_user():
+	"""
+	Creates a new user with the specified credentials.
+	The username, password, and folder name (created using a UUID generator) are stored in a SQLite database (master.db).
+	"""
+	try:
+		data = request.get_json()
+		username = data.get('username')
+		password_md5 = data.get('password_md5')
+
+		# Generate a unique folder name using UUID
+		folder_name = str(uuid.uuid4())
+		
+		# Insert into SQLite database
+		conn = sqlite3.connect(MASTER_DB)
+		cursor = conn.cursor()
+		cursor.execute(
+			'INSERT INTO credentials (username, password_md5, folder_name) VALUES (?, ?, ?)',
+			(username, password_md5, folder_name)
+		)
+		conn.commit()
+		conn.close()
+		
+		os.mkdir(os.path.join(DATA_FOLDER, folder_name))
+	
+		return jsonify({'success': True, 'error_string': None})
+	except sqlite3.IntegrityError:
+		return jsonify({'success': False, 'error_string': 'Username already exists'}), 400
+	except Exception as e:
+		return jsonify({'success': False, 'error_string': str(e)}), 500
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
