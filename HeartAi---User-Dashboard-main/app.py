@@ -1,164 +1,175 @@
-from flask import Flask, request, jsonify, send_file, abort
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
-import traceback
 import sqlite3
-import hashlib
 import uuid
-import librosa
-import librosa.display
-import matplotlib.pyplot as plt
+import time
+from heartai import create_inference_and_spectrogram_file
 
 app = Flask(__name__)
 CORS(app)
 
-# Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FOLDER = os.path.join(BASE_DIR, 'data')
 MASTER_DB = os.path.join(DATA_FOLDER, 'master.db')
-
-# Ensure required folders exist
 os.makedirs(DATA_FOLDER, exist_ok=True)
 
-# Initialize the database
-def initialize_database():
-    with sqlite3.connect(MASTER_DB) as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS credentials (
-                username TEXT PRIMARY KEY,
-                password_md5 CHAR(32),
-                folder_name TEXT
-            )
-        ''')
-        conn.commit()
 
-initialize_database()
-
-# Utility to hash passwords
-def hash_password(password):
-    return hashlib.md5(password.encode()).hexdigest()
-
-# Login route
-@app.route('/login', methods=['POST'])
-def login():
+def validate_credentials(username, password_md5):
     try:
-        data = request.get_json()
-        username = data.get('username')
-        password_md5 = data.get('password_md5')
-
-        with sqlite3.connect(MASTER_DB) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                'SELECT folder_name FROM credentials WHERE username = ? AND password_md5 = ?',
+        with sqlite3.connect(MASTER_DB) as con:
+            cur = con.cursor()
+            result = cur.execute(
+                "SELECT role FROM credentials WHERE username=? AND password_md5=?",
                 (username, password_md5)
-            )
-            result = cursor.fetchone()
+            ).fetchone()
+        return result
+    except sqlite3.Error as e:
+        print(f"Database error: {e}")
+        return None
 
-        if result:
-            return jsonify({"success": True, "folder_name": result[0]}), 200
-        else:
-            return jsonify({"success": False, "error": "Invalid credentials"}), 401
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
 
-# Create user route
 @app.route('/createuser', methods=['POST'])
 def create_user():
     try:
         data = request.get_json()
         username = data.get('username')
         password_md5 = data.get('password_md5')
+        role = data.get('role', 'patient')
 
-        folder_name = str(uuid.uuid4())  # Generate a unique folder name
+        folder_name = str(uuid.uuid4())
         os.makedirs(os.path.join(DATA_FOLDER, folder_name), exist_ok=True)
 
-        with sqlite3.connect(MASTER_DB) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                'INSERT INTO credentials (username, password_md5, folder_name) VALUES (?, ?, ?)',
-                (username, password_md5, folder_name)
+        with sqlite3.connect(MASTER_DB) as con:
+            cur = con.cursor()
+            cur.execute(
+                "INSERT INTO credentials (username, password_md5, folder_name, role) VALUES (?, ?, ?, ?)",
+                (username, password_md5, folder_name, role)
             )
-            conn.commit()
-
-        return jsonify({"success": True}), 200
+            con.commit()
+        return jsonify({'success': True}), 200
     except sqlite3.IntegrityError:
-        return jsonify({"success": False, "error": "Username already exists"}), 400
+        return jsonify({'error': 'Username already exists'}), 400
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        print(f"Error creating user: {e}")
+        return jsonify({'error': 'Failed to create user'}), 500
 
-# Upload route
-@app.route('/upload', methods=['POST'])
-def upload():
+
+@app.route('/login', methods=['POST'])
+def login():
     try:
-        if 'file' not in request.files:
-            return jsonify({"error": "No file provided"}), 400
-
-        file = request.files['file']
-        data = request.form
+        data = request.get_json()
         username = data.get('username')
         password_md5 = data.get('password_md5')
+        role = validate_credentials(username, password_md5)
 
-        with sqlite3.connect(MASTER_DB) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                'SELECT folder_name FROM credentials WHERE username = ? AND password_md5 = ?',
-                (username, password_md5)
-            )
-            result = cursor.fetchone()
-
-        if not result:
+        if role:
+            return jsonify({"username": username, "role": role[0]}), 200
+        else:
             return jsonify({"error": "Invalid credentials"}), 401
+    except Exception as e:
+        print(f"Error during login: {e}")
+        return jsonify({'error': 'Failed to log in'}), 500
 
-        folder_name = result[0]
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    try:
+        username = request.form.get('username')
+        password_md5 = request.form.get('password_md5')
+        patient_name = request.form.get('patient_name')
+
+        if not validate_credentials(username, password_md5):
+            return jsonify({'error': 'Invalid credentials'}), 401
+
+        file = request.files.get('file')
+        if not file:
+            return jsonify({'error': 'No file data provided'}), 400
+
+        epoch = int(time.time())
+        folder_name = str(uuid.uuid4())
         user_folder = os.path.join(DATA_FOLDER, folder_name)
-        file_path = os.path.join(user_folder, file.filename)
+        os.makedirs(user_folder, exist_ok=True)
+
+        file_path = os.path.join(user_folder, f"{epoch}.wav")
         file.save(file_path)
 
-        # Process the uploaded file (e.g., generate spectrogram)
-        audio, sr = librosa.load(file_path, sr=None)
-        spectrogram = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=128, fmax=8000)
-        spectrogram_db = librosa.power_to_db(spectrogram, ref=np.max)
+        inference_result = create_inference_and_spectrogram_file(file_path)
 
-        spectrogram_path = file_path.replace('.wav', '_spectrogram.png')
-        plt.figure(figsize=(10, 4))
-        librosa.display.specshow(spectrogram_db, sr=sr, x_axis='time', y_axis='mel', cmap='magma')
-        plt.colorbar(format='%+2.0f dB')
-        plt.title(f"Spectrogram of {file.filename}")
-        plt.tight_layout()
-        plt.savefig(spectrogram_path, bbox_inches='tight', pad_inches=0)
-        plt.close()
+        with sqlite3.connect(MASTER_DB) as con:
+            cur = con.cursor()
+            cur.execute(
+                "INSERT INTO analysis_history (username, epoch, file_path, inference, patient_name) VALUES (?, ?, ?, ?, ?)",
+                (username, epoch, file_path, inference_result, patient_name)
+            )
+            con.commit()
 
-        return jsonify({
-            "success": True,
-            "spectrogram_image_url": spectrogram_path
-        }), 200
+        return jsonify({'epoch': epoch, 'inference': inference_result}), 200
     except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        print(f"Error during file upload: {e}")
+        return jsonify({'error': 'Failed to process the file'}), 500
 
-# Access history route
+
 @app.route('/accesshistory', methods=['GET'])
 def access_history():
     try:
-        data = request.get_json()
-        username = data.get("username")
-        password_md5 = data.get("password_md5")
-        if not validate_credentials(username, password_md5):
-            return jsonify({"error": "Invalid credentials"}), 401
+        username = request.args.get('username')
+        password_md5 = request.args.get('password_md5')
 
-        user_folder = get_user_folder(username)
-        folder_path = os.path.join(DATA_FOLDER, user_folder)
-        epochs = []
-        if os.path.exists(folder_path):
-            for file in os.listdir(folder_path):
-                if file.endswith(".wav") or file.endswith(".flac"):
-                    epochs.append(file)
-        
-        return jsonify({"folder": user_folder, "epochs": sorted(epochs, reverse=True)}), 200
+        if not validate_credentials(username, password_md5):
+            return jsonify({'error': 'Invalid credentials'}), 401
+
+        with sqlite3.connect(MASTER_DB) as con:
+            cur = con.cursor()
+            query = "SELECT id, patient_name, epoch FROM analysis_history WHERE username=? ORDER BY epoch DESC"
+            rows = cur.execute(query, (username,)).fetchall()
+
+        result = [{"id": row[0], "patient_name": row[1], "epoch": row[2]} for row in rows]
+        return jsonify(result), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error retrieving access history: {e}")
+        return jsonify({'error': 'Failed to retrieve history'}), 500
+
+
+@app.route('/history/<int:record_id>', methods=['GET'])
+def view_history(record_id):
+    try:
+        with sqlite3.connect(MASTER_DB) as con:
+            cur = con.cursor()
+            query = "SELECT patient_name, file_path, inference FROM analysis_history WHERE id=?"
+            row = cur.execute(query, (record_id,)).fetchone()
+
+        if row:
+            return jsonify({"patient_name": row[0], "file_path": row[1], "inference": row[2]}), 200
+        else:
+            return jsonify({'error': 'Record not found'}), 404
+    except Exception as e:
+        print(f"Error retrieving history details: {e}")
+        return jsonify({'error': 'Failed to retrieve history details'}), 500
 
 
 if __name__ == '__main__':
+    if not os.path.exists(MASTER_DB):
+        with sqlite3.connect(MASTER_DB) as con:
+            cur = con.cursor()
+            cur.execute(
+                """CREATE TABLE credentials (
+                    username TEXT PRIMARY KEY,
+                    password_md5 TEXT NOT NULL,
+                    folder_name TEXT NOT NULL,
+                    role TEXT NOT NULL
+                )"""
+            )
+            cur.execute(
+                """CREATE TABLE analysis_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    epoch INTEGER NOT NULL,
+                    file_path TEXT NOT NULL,
+                    inference TEXT NOT NULL,
+                    patient_name TEXT NOT NULL,
+                    FOREIGN KEY (username) REFERENCES credentials (username)
+                )"""
+            )
+            con.commit()
     app.run(host='0.0.0.0', port=8080)
