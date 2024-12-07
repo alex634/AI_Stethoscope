@@ -190,7 +190,6 @@ def main_app():
             # Display history records
             for record in history:
                 display_date = datetime.datetime.fromtimestamp(record['epoch']).strftime('%Y-%m-%d %H:%M:%S')
-                # Removed the 'key' argument from st.expander()
                 with st.expander(f"{record['patient_name']} - {display_date}"):
                     # Fetch detailed information for the record
                     details_response = requests.get(
@@ -209,8 +208,13 @@ def main_app():
                         )
                         st.write("Patient Name:", details_data["patient_name"])
                         st.write("Inference:", inference_message)
-                        st.audio(details_data["file_path"])
-                        st.image(details_data["file_path"].replace(".wav", ".png"))
+
+                        # Display audio and image using the new API endpoints
+                        audio_url = f"{BACKEND_URL}/get_audio/{record['id']}?username={st.session_state.username}&password_md5={st.session_state.password_md5}"
+                        image_url = f"{BACKEND_URL}/get_image/{record['id']}?username={st.session_state.username}&password_md5={st.session_state.password_md5}"
+
+                        st.audio(audio_url)
+                        st.image(image_url)
 
                         # Display and edit doctor notes if the user is a doctor
                         if st.session_state.role == "Doctor":

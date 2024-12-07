@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file, make_response
 from flask_cors import CORS
 import os
 import sqlite3
@@ -10,10 +10,32 @@ app = Flask(__name__)
 CORS(app)
 
 # Define base directories
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_FOLDER = os.path.join(BASE_DIR, 'data')
+
+# Function to find the data folder
+def find_data_folder():
+    current_dir = os.path.abspath(os.path.dirname(__file__))
+    while True:
+        potential_data_folder = os.path.join(current_dir, 'HeartAi---User-Dashboard-main', 'data')
+        if os.path.isdir(potential_data_folder):
+            return potential_data_folder
+        parent_dir = os.path.abspath(os.path.join(current_dir, '..'))
+        if parent_dir == current_dir:
+            # Reached the root directory
+            break
+        current_dir = parent_dir
+    raise FileNotFoundError("Data folder 'HeartAi---User-Dashboard-main\\data' not found.")
+
+try:
+    DATA_FOLDER = find_data_folder()
+    print(f"DATA_FOLDER set to: {DATA_FOLDER}")
+except FileNotFoundError as e:
+    print(e)
+    # If the data folder is not found, set it to a default path
+    DATA_FOLDER = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data')
+    os.makedirs(DATA_FOLDER, exist_ok=True)
+    print(f"DATA_FOLDER set to default: {DATA_FOLDER}")
+
 MASTER_DB = os.path.join(DATA_FOLDER, 'master.db')
-os.makedirs(DATA_FOLDER, exist_ok=True)
 
 def validate_credentials(username, password_md5):
     """
@@ -109,17 +131,21 @@ def upload_file():
         user_folder = os.path.join(DATA_FOLDER, folder_name)
         os.makedirs(user_folder, exist_ok=True)
 
-        file_path = os.path.join(user_folder, f"{epoch}.wav")
+        file_name = f"{epoch}.wav"
+        file_path = os.path.join(user_folder, file_name)
         file.save(file_path)
 
         # Perform analysis on the file
         inference_result = create_inference_and_spectrogram_file(file_path)
 
+        # Store relative paths
+        relative_file_path = os.path.relpath(file_path, DATA_FOLDER)
+
         with sqlite3.connect(MASTER_DB) as con:
             cur = con.cursor()
             cur.execute(
                 "INSERT INTO analysis_history (username, epoch, file_path, inference, patient_name) VALUES (?, ?, ?, ?, ?)",
-                (username, epoch, file_path, inference_result, patient_name)
+                (username, epoch, relative_file_path, inference_result, patient_name)
             )
             con.commit()
 
@@ -179,7 +205,7 @@ def view_history(record_id):
 
             return jsonify({
                 "patient_name": row[0],
-                "file_path": row[1],
+                "file_path": row[1],  # Relative path
                 "inference": row[2],
                 "doctor_notes": row[3]
             }), 200
@@ -252,13 +278,13 @@ def delete_record(record_id):
         with sqlite3.connect(MASTER_DB) as con:
             cur = con.cursor()
             # Check if the record exists and belongs to the user
-            cur.execute("SELECT username FROM analysis_history WHERE id=?", (record_id,))
+            cur.execute("SELECT username, file_path FROM analysis_history WHERE id=?", (record_id,))
             row = cur.fetchone()
 
             if not row:
                 return jsonify({'error': 'Record not found'}), 404
 
-            record_username = row[0]
+            record_username, file_path = row
             if record_username != username:
                 return jsonify({'error': 'Unauthorized: You can only delete your own records'}), 403
 
@@ -266,10 +292,97 @@ def delete_record(record_id):
             cur.execute("DELETE FROM analysis_history WHERE id=?", (record_id,))
             con.commit()
 
+            # Optionally delete the files from the file system
+            full_file_path = os.path.abspath(os.path.join(DATA_FOLDER, file_path))
+            if os.path.exists(full_file_path):
+                os.remove(full_file_path)
+            # Also remove the spectrogram image
+            image_path = full_file_path.replace('.wav', '.png')
+            if os.path.exists(image_path):
+                os.remove(image_path)
+
         return jsonify({'message': 'Record deleted successfully.'}), 200
     except Exception as e:
         print(f"Error deleting record: {e}")
         return jsonify({'error': 'Failed to delete record.'}), 500
+
+@app.route('/get_audio/<int:record_id>', methods=['GET'])
+def get_audio(record_id):
+    """
+    API endpoint to serve the audio file for a specific record.
+    """
+    try:
+        username = request.args.get('username')
+        password_md5 = request.args.get('password_md5')
+
+        if not validate_credentials(username, password_md5):
+            return jsonify({'error': 'Invalid credentials'}), 401
+
+        with sqlite3.connect(MASTER_DB) as con:
+            cur = con.cursor()
+            query = "SELECT file_path, username FROM analysis_history WHERE id=?"
+            row = cur.execute(query, (record_id,)).fetchone()
+
+        if row:
+            file_path, record_username = row
+            user_role = validate_credentials(username, password_md5)[0]
+
+            if username != record_username and user_role != 'doctor':
+                return jsonify({'error': 'Unauthorized access'}), 403
+
+            full_file_path = os.path.abspath(os.path.join(DATA_FOLDER, file_path))
+            if os.path.exists(full_file_path):
+                response = make_response(send_file(full_file_path, mimetype='audio/wav'))
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                return response
+            else:
+                print(f"Audio file not found at: {full_file_path}")
+                return jsonify({'error': 'File not found'}), 404
+        else:
+            return jsonify({'error': 'Record not found'}), 404
+    except Exception as e:
+        print(f"Error serving audio file: {e}")
+        return jsonify({'error': 'Failed to serve audio file.'}), 500
+
+@app.route('/get_image/<int:record_id>', methods=['GET'])
+def get_image(record_id):
+    """
+    API endpoint to serve the spectrogram image for a specific record.
+    """
+    try:
+        username = request.args.get('username')
+        password_md5 = request.args.get('password_md5')
+
+        if not validate_credentials(username, password_md5):
+            return jsonify({'error': 'Invalid credentials'}), 401
+
+        with sqlite3.connect(MASTER_DB) as con:
+            cur = con.cursor()
+            query = "SELECT file_path, username FROM analysis_history WHERE id=?"
+            row = cur.execute(query, (record_id,)).fetchone()
+
+        if row:
+            file_path, record_username = row
+            user_role = validate_credentials(username, password_md5)[0]
+
+            if username != record_username and user_role != 'doctor':
+                return jsonify({'error': 'Unauthorized access'}), 403
+
+            # Replace .wav with .png to get the image path
+            image_relative_path = file_path.replace('.wav', '.png')
+            full_image_path = os.path.abspath(os.path.join(DATA_FOLDER, image_relative_path))
+            if os.path.exists(full_image_path):
+                response = make_response(send_file(full_image_path, mimetype='image/png'))
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                return response
+            else:
+                print(f"Image file not found at: {full_image_path}")
+                return jsonify({'error': 'Image not found'}), 404
+        else:
+            return jsonify({'error': 'Record not found'}), 404
+    except Exception as e:
+        print(f"Error serving image file: {e}")
+        return jsonify({'error': 'Failed to serve image file.'}), 500
 
 if __name__ == '__main__':
     if not os.path.exists(MASTER_DB):
