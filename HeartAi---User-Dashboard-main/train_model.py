@@ -3,7 +3,7 @@ import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
 import numpy as np
-from tensorflow.keras.preprocessing.image import load_img, img_to_array  # 用于加载图像
+from tensorflow.keras.preprocessing.image import load_img, img_to_array  # For loading images
 
 # Define paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
