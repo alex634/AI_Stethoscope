@@ -871,5 +871,3 @@ if __name__ == '__main__':
                 cur.execute("ALTER TABLE analysis_history ADD COLUMN doctor_notes TEXT")
                 con.commit()
     app.run(host='0.0.0.0', port=8080)
-                con.commit()
-    app.run(host='0.0.0.0', port=8080)
