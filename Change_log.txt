@@ -1,0 +1,64 @@
+Version 1.0.0 - Initial Release
+app.py:
+User registration and login functionality.
+File upload endpoint to process and analyze heartbeat data.
+SQLite database with basic user and history management.
+streamlit_app.py:
+Basic UI for login, registration, file upload, and viewing analysis history.
+
+Version 1.1.0 - Database Enhancements
+Database Improvements:
+Added a role column in the credentials table to differentiate between doctors and patients.
+Added a patient_name column in the analysis_history table for patient information.
+app.py:
+Automatic database initialization logic for missing tables.
+
+Version 1.2.0 - Role-Based Access Control
+streamlit_app.py:
+Users can now select their role (Doctor or Patient) during registration.
+Role-based validation added during login to prevent mismatches.
+app.py:
+Added role validation for API endpoints to restrict access based on user roles.
+
+Version 1.3.0 - Enhanced Upload and Analysis
+streamlit_app.py:
+Added input field for entering the patient's name during file upload.
+Displayed inference results and spectrogram images upon successful upload.
+Doctors can now add notes to records and save them to the database.
+app.py:
+Saved patient names, spectrograms, and doctor notes during uploads.
+Returned detailed analysis results and spectrogram paths in API responses.
+
+Version 1.4.0 - History Viewing Enhancements
+streamlit_app.py:
+Displayed history grouped by patient name and analysis timestamp.
+Added functionality to view spectrograms, analysis results, and doctor notes directly from history records.
+app.py:
+Updated /accesshistory endpoint to include more details (e.g., patient name and file paths).
+
+Version 1.5.0 - Error Handling and Debugging
+Improved error logging in app.py:
+Added detailed logs for database operations, user validation, and file uploads.
+Debugging fixes:
+Resolved KeyError: 'inference' errors during history access.
+Fixed cannot identify image file errors in file processing.
+Addressed database locking issues in multi-threaded scenarios.
+
+Version 1.6.0 - UI Enhancements
+Improved UI in streamlit_app.py:
+Enhanced layout for login, registration, and upload forms.
+Added informative messages for successful uploads and analysis results.
+Improved error messages to provide clearer instructions to users.
+
+Version 1.7.0 - Bug Fixes
+Fixed saving and retrieval issues for doctor notes in streamlit_app.py.
+Resolved upload errors caused by unsupported audio formats.
+Improved database query reliability for multi-user scenarios.
+
+Version 1.8.0 - Final Refinements
+streamlit_app.py:
+Users can now directly view all relevant analysis data (e.g., spectrograms and notes) in the history view.
+Enhanced session management to improve navigation between pages.
+app.py:
+Optimized database queries for better performance.
+Fixed edge cases in file upload and history retrieval logic.
